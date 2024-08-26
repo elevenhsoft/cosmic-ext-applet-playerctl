@@ -1,0 +1,20 @@
+[package]
+name = "cosmic-ext-applet-playerctl"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+playerctl = "0.1.0"
+tokio = { version = "1.36.0", features = ["time"] }
+
+[dependencies.libcosmic]
+git = "https://github.com/pop-os/libcosmic"
+default-features = false
+features = [
+  "applet",
+  "applet-token",
+  "tokio",
+  "wayland",
+  "desktop",
+  "dbus-config",
+]
