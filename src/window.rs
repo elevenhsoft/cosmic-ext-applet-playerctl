@@ -87,11 +87,7 @@ impl Application for Window {
             .line_height(LineHeight::Absolute(Pixels::from(length)));
 
         let ele = Element::from(
-            container(
-                row!(song_text, container(vertical_space(fixed_length)))
-                    .align_items(Alignment::Center),
-            )
-            .max_width(300.0),
+            row!(song_text, container(vertical_space(fixed_length))).align_items(Alignment::Center),
         );
 
         let button = cosmic::widget::button(ele)
@@ -99,6 +95,6 @@ impl Application for Window {
             .style(cosmic::theme::Button::AppletIcon)
             .on_press(Message::UpdateTrack);
 
-        container(button).max_width(500.0).into()
+        container(button).max_width(300.0).into()
     }
 }
