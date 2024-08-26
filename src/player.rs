@@ -114,7 +114,7 @@ pub async fn run(output: &mut futures::channel::mpsc::Sender<MprisUpdate>) {
     let state = match State::new().await {
         Ok(state) => state,
         Err(err) => {
-            println!("Faile do monitor for mpris clients: {}", err);
+            println!("Error: {}", err);
             return;
         }
     };
