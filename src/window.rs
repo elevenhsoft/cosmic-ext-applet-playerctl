@@ -1,20 +1,20 @@
 use std::time::Duration;
 
 use cosmic::{
-    app::Core,
+    app::{Command, Core},
     iced::{subscription, Alignment, Length, Pixels, Subscription},
     iced_core::text::LineHeight,
     iced_style::application,
     iced_widget::row,
     widget::{container, vertical_space},
-    Application, Command, Element, Theme,
+    Application, Element, Theme,
 };
 
-use playerctl::PlayerCtl;
+use crate::player::{run, MprisUpdate};
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    UpdateTrack,
+    UpdateTrack(MprisUpdate),
 }
 
 pub struct Window {
@@ -29,7 +29,7 @@ impl Application for Window {
 
     type Message = Message;
 
-    const APP_ID: &'static str = "io.github.elevenhsoft.CosmicExtPlayerctlMetadata";
+    const APP_ID: &'static str = "io.github.elevenhsoft.CosmicExtAppletPlayerctl";
 
     fn core(&self) -> &Core {
         &self.core
@@ -39,7 +39,7 @@ impl Application for Window {
         &mut self.core
     }
 
-    fn init(core: Core, _flags: Self::Flags) -> (Self, cosmic::app::Command<Self::Message>) {
+    fn init(core: Core, _flags: Self::Flags) -> (Self, Command<Message>) {
         let formatted_track = String::new();
 
         (
@@ -51,33 +51,41 @@ impl Application for Window {
         )
     }
 
+    fn subscription(&self) -> Subscription<Message> {
+        subscription::channel(0, 50, move |mut output| async move {
+            loop {
+                run(&mut output).await;
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
+        })
+        .map(Message::UpdateTrack)
+    }
+
     fn style(&self) -> Option<<Theme as application::StyleSheet>::Style> {
         Some(cosmic::applet::style())
     }
 
-    fn subscription(&self) -> Subscription<Self::Message> {
-        let subscription = subscription::unfold("refresh", (), move |()| async move {
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            ((), ())
-        })
-        .map(|_| Message::UpdateTrack);
-
-        Subscription::batch(vec![subscription])
-    }
-
-    fn update(&mut self, message: Self::Message) -> cosmic::app::Command<Self::Message> {
+    fn update(&mut self, message: Message) -> Command<Message> {
         match message {
-            Message::UpdateTrack => {
-                let metadata = PlayerCtl::metadata();
+            Message::UpdateTrack(mpris) => {
+                let MprisUpdate::Player(player) = mpris;
 
-                self.formatted_track = format!("{} - {}", &metadata.artist, &metadata.title);
+                if let Some(status) = player.get_status() {
+                    let artist = match status.artists {
+                        Some(artists) => artists.concat(),
+                        None => String::new(),
+                    };
+                    let title = status.title.unwrap_or_default();
+
+                    self.formatted_track = format!("{} - {}", artist, title);
+                }
             }
         }
 
         Command::none()
     }
 
-    fn view(&self) -> Element<Self::Message> {
+    fn view(&self) -> Element<Message> {
         let length = (self.core.applet.suggested_size(true).0
             + 2 * self.core.applet.suggested_padding(true)) as f32;
 
@@ -92,8 +100,7 @@ impl Application for Window {
 
         let button = cosmic::widget::button(ele)
             .padding([0, self.core.applet.suggested_padding(true)])
-            .style(cosmic::theme::Button::AppletIcon)
-            .on_press(Message::UpdateTrack);
+            .style(cosmic::theme::Button::AppletIcon);
 
         container(button).max_width(300.0).into()
     }
