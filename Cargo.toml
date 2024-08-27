@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.36.0", features = ["time"] }
+tokio = { version = "1.36.0", features = ["full"] }
 mpris2-zbus = { git = "https://github.com/pop-os/dbus-settings-bindings" }
 zbus = { version = "4.2.1", default-features = false, features = ["tokio"] }
 urlencoding = "2.1.3"
