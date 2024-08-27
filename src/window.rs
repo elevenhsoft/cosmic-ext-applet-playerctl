@@ -1,8 +1,9 @@
-use std::time::Duration;
-
 use cosmic::{
     app::{Command, Core},
-    iced::{subscription, Alignment, Length, Pixels, Subscription},
+    iced::{
+        futures::{self, SinkExt},
+        subscription, Alignment, Length, Pixels, Subscription,
+    },
     iced_core::text::LineHeight,
     iced_style::application,
     iced_widget::row,
@@ -53,10 +54,9 @@ impl Application for Window {
 
     fn subscription(&self) -> Subscription<Message> {
         subscription::channel(0, 50, move |mut output| async move {
-            loop {
-                run(&mut output).await;
-                tokio::time::sleep(Duration::from_secs(3)).await;
-            }
+            run(&mut output).await;
+            let _ = output.send(MprisUpdate::Finished).await;
+            futures::future::pending().await
         })
         .map(Message::UpdateTrack)
     }
@@ -67,19 +67,20 @@ impl Application for Window {
 
     fn update(&mut self, message: Message) -> Command<Message> {
         match message {
-            Message::UpdateTrack(mpris) => {
-                let MprisUpdate::Player(player) = mpris;
-
-                if let Some(status) = player.get_status() {
+            Message::UpdateTrack(update) => match update {
+                MprisUpdate::Status(status) => {
                     let artist = match status.artists {
                         Some(artists) => artists.concat(),
                         None => String::new(),
                     };
                     let title = status.title.unwrap_or_default();
 
-                    self.formatted_track = format!("{} - {}", artist, title);
+                    let formatted = format!("{} - {}", artist, title);
+                    println!("Playing: {formatted}");
+                    self.formatted_track = formatted;
                 }
-            }
+                MprisUpdate::Finished => {}
+            },
         }
 
         Command::none()

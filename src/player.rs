@@ -1,4 +1,4 @@
-use cosmic::iced::futures::{self, SinkExt};
+use cosmic::iced::futures::{self, future::OptionFuture, SinkExt, StreamExt};
 use mpris2_zbus::{enumerator, player::Player};
 use std::path::PathBuf;
 use urlencoding::decode;
@@ -32,13 +32,13 @@ impl PlayerStatus {
 
 #[derive(Clone, Debug)]
 pub enum MprisUpdate {
-    Player(MprisPlayer),
+    Status(PlayerStatus),
+    Finished,
 }
 
 #[derive(Clone, Debug)]
 pub struct MprisPlayer {
     player: Player,
-    status: Option<PlayerStatus>,
 }
 
 impl MprisPlayer {
@@ -47,21 +47,18 @@ impl MprisPlayer {
 
         Ok(Self {
             player: player.clone(),
-            status: PlayerStatus::new(player).await,
         })
     }
 
     fn name(&self) -> &BusName {
         self.player.inner().destination()
     }
-
-    pub fn get_status(self) -> Option<PlayerStatus> {
-        self.status
-    }
 }
 
 pub struct State {
     players: Vec<MprisPlayer>,
+    player: Option<MprisPlayer>,
+    active_player_metadata_stream: Option<Box<dyn futures::Stream<Item = ()> + Unpin + Send>>,
 }
 
 impl State {
@@ -80,38 +77,63 @@ impl State {
 
         players.sort_by(|a, b| a.name().cmp(b.name()));
 
-        Ok(Self { players })
-    }
-
-    pub async fn get_active_player(&self) -> Option<MprisPlayer> {
-        let mut best = (0, None::<MprisPlayer>);
-        let eval = |p: Player| async move {
-            let v = {
-                let status = p.playback_status().await;
-
-                match status {
-                    Ok(mpris2_zbus::player::PlaybackStatus::Playing) => 100,
-                    Ok(mpris2_zbus::player::PlaybackStatus::Paused) => 10,
-                    _ => return 0,
-                }
-            };
-
-            v + p.metadata().await.is_ok() as i32
+        let mut state = State {
+            players: players.clone(),
+            player: get_active_player(players).await,
+            active_player_metadata_stream: None,
         };
 
-        for p in self.players.iter() {
-            let v = eval(p.player.clone()).await;
-            if v > best.0 {
-                best = (v, Some(p.to_owned()));
-            }
-        }
+        state.get_metadata_stream().await;
 
-        best.1
+        Ok(state)
+    }
+
+    pub async fn get_metadata_stream(&mut self) {
+        if let Some(player) = get_active_player(self.players.clone()).await {
+            let controls_changed = futures::stream::select_all([
+                player.player.receive_can_pause_changed().await,
+                player.player.receive_can_play_changed().await,
+                player.player.receive_can_go_previous_changed().await,
+                player.player.receive_can_go_next_changed().await,
+            ]);
+            let metadata_changed = player.player.receive_metadata_changed().await;
+
+            let stream =
+                futures::stream::select(controls_changed.map(|_| ()), metadata_changed.map(|_| ()));
+
+            self.active_player_metadata_stream = Some(Box::new(stream));
+        }
     }
 }
 
+pub async fn get_active_player(players: Vec<MprisPlayer>) -> Option<MprisPlayer> {
+    let mut best = (0, None::<MprisPlayer>);
+    let eval = |p: Player| async move {
+        let v = {
+            let status = p.playback_status().await;
+
+            match status {
+                Ok(mpris2_zbus::player::PlaybackStatus::Playing) => 100,
+                Ok(mpris2_zbus::player::PlaybackStatus::Paused) => 10,
+                _ => return 0,
+            }
+        };
+
+        v + p.metadata().await.is_ok() as i32
+    };
+
+    for p in players.iter() {
+        let v = eval(p.player.clone()).await;
+        if v > best.0 {
+            best = (v, Some(p.to_owned()));
+        }
+    }
+
+    best.1
+}
+
 pub async fn run(output: &mut futures::channel::mpsc::Sender<MprisUpdate>) {
-    let state = match State::new().await {
+    let mut state = match State::new().await {
         Ok(state) => state,
         Err(err) => {
             println!("Error: {}", err);
@@ -119,7 +141,22 @@ pub async fn run(output: &mut futures::channel::mpsc::Sender<MprisUpdate>) {
         }
     };
 
-    if let Some(mpris_player) = state.get_active_player().await {
-        let _ = output.send(MprisUpdate::Player(mpris_player)).await;
+    loop {
+        if let Some(player) = &state.player {
+            if let Some(status) = PlayerStatus::new(player.player.clone()).await {
+                let _ = output.send(MprisUpdate::Status(status)).await;
+            }
+        };
+
+        let metadata_changed_next = OptionFuture::from(
+            state
+                .active_player_metadata_stream
+                .as_mut()
+                .map(|s| s.next()),
+        );
+
+        tokio::select! {
+            _ = metadata_changed_next, if state.player.is_some() => {}
+        };
     }
 }
